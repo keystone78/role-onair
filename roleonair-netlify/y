@@ -1,0 +1,167 @@
+rules_version = '2';
+// =========================================================
+// 1인1역 ON AIR — Firestore 보안(승인) 규칙
+// Firebase 콘솔 → Firestore Database → 규칙(Rules) 탭에 통째로 붙여 넣고 '게시'
+//
+// 로그인 방식: 모든 사용자는 '익명 로그인' (구글 로그인 없음)
+// 선생님 확인: 반코드 + 선생님 비밀번호 → 비밀번호가 맞을 때만 owners/{내 uid} 문서를 만들 수 있음
+//
+// 구조
+//  classes/{반코드6자리}              pub = 반 설정(역할·명단·입력 시간·생방송 신호)   읽기: 누구나(익명 포함) / 쓰기: 담임
+//    /private/admin                   선생님 비밀번호                                  아무도 읽을 수 없음
+//    /owners/{uid}                    담임으로 등록된 기기 (공동 담임·같은 학년 선생님 가능)
+//    /secrets/{번호}                  학생 확인코드                                    담임만
+//    /prefs/{번호}                    학생 희망                                        학생: 열려 있을 때 자기 것만
+//    /votes/{번호}                    또래상담 투표                                    학생: 열려 있을 때 자기 것만
+//    /result/current                  배정 결과                                        학생: 발표(published)된 것만 읽기
+//  grades/{학년코드6자리}             학년 공간 이름
+//    /members/{반코드}                참여한 반                                        그 반 담임만 쓰기
+//    /templates/{id}                  학년 역할 세트                                   참여한 반 담임이 올리고, 올린 반만 지우기
+//    /boards/{반코드}                 반별 최종 역할표                                 그 반 담임만 쓰기
+// =========================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function classPath(c) { return /databases/$(database)/documents/classes/$(c); }
+    function isOwner(c) {
+      return signedIn() && exists(/databases/$(database)/documents/classes/$(c)/owners/$(request.auth.uid));
+    }
+    function cls(c) { return get(classPath(c)).data; }
+    function isCode(c) { return c.matches('^[0-9]{6}$'); }
+
+    // 확인코드 사용 중이면 제출 문서의 pin 이 secrets/{no}.pin 과 같아야 함
+    function pinOk(c, no) {
+      return cls(c).pub.usePin != true
+        || request.resource.data.pin == get(/databases/$(database)/documents/classes/$(c)/secrets/$(no)).data.pin;
+    }
+
+    // ---------- 반 ----------
+    match /classes/{c} {
+      allow get: if signedIn();                       // 반코드를 아는 사람(학생)은 설정을 읽음
+      allow list: if false;                           // 반 목록 훑어보기 금지 (다른 반코드 노출 방지)
+      // 만들기: 같은 일괄 저장 안에서 비밀번호 문서와 '나를 담임으로 등록'이 함께 있어야 함
+      allow create: if signedIn() && isCode(c)
+        && request.resource.data.keys().hasOnly(['pub', 'createdAt', 'updatedAt'])
+        && existsAfter(/databases/$(database)/documents/classes/$(c)/owners/$(request.auth.uid));
+      allow update: if isOwner(c)
+        && request.resource.data.keys().hasOnly(['pub', 'createdAt', 'updatedAt']);
+      allow delete: if isOwner(c);
+
+      // ---------- 선생님 비밀번호 (읽기 불가) ----------
+      match /private/{doc} {
+        allow read: if false;
+        // 처음 만들 때(반이 아직 없을 때)만 생성 가능 → 남의 반 비밀번호를 덮어쓸 수 없음
+        allow create: if signedIn() && doc == 'admin' && !exists(classPath(c))
+          && existsAfter(classPath(c))
+          && request.resource.data.key is string && request.resource.data.key.size() >= 6;
+        allow update: if isOwner(c) && doc == 'admin'
+          && request.resource.data.key is string && request.resource.data.key.size() >= 6;
+        allow delete: if isOwner(c);
+      }
+
+      // ---------- 담임 등록: 비밀번호가 맞으면 자기 uid 로만 ----------
+      match /owners/{uid} {
+        allow get: if signedIn() && (request.auth.uid == uid || isOwner(c));
+        allow list: if isOwner(c);
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['key', 'at'])
+          && request.resource.data.key == getAfter(/databases/$(database)/documents/classes/$(c)/private/admin).data.key;
+        allow delete: if isOwner(c);
+      }
+
+      // ---------- 학생 확인코드 (담임만) ----------
+      match /secrets/{no} {
+        allow read, write: if isOwner(c);
+      }
+
+      // ---------- 학생 희망 ----------
+      match /prefs/{no} {
+        function validPref() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['no', 'uid', 'pin', 'choices', 'double', 'peerVolunteer', 'at'])
+            && d.no == int(no)
+            && d.uid == request.auth.uid
+            && d.choices is list && d.choices.size() >= 1 && d.choices.size() <= 7
+            && d.get('double', false) is bool
+            && d.get('peerVolunteer', false) is bool;
+        }
+        allow get:  if isOwner(c) || (signedIn() && (resource == null || resource.data.uid == request.auth.uid));
+        allow list: if isOwner(c);
+        allow create: if isOwner(c)
+          || (signedIn() && cls(c).pub.prefsOpen == true && validPref() && pinOk(c, no));
+        // 수정: 같은 기기(uid)이거나, 확인코드를 맞게 넣은 경우
+        allow update: if isOwner(c)
+          || (signedIn() && cls(c).pub.prefsOpen == true && validPref() && pinOk(c, no)
+              && (resource.data.uid == request.auth.uid || cls(c).pub.usePin == true));
+        allow delete: if isOwner(c);
+      }
+
+      // ---------- 또래상담 투표 ----------
+      match /votes/{no} {
+        function validVote() {
+          let d = request.resource.data;
+          let per = cls(c).pub.peer.votesPerGender;
+          return d.keys().hasOnly(['no', 'uid', 'pin', 'male', 'female', 'at'])
+            && d.no == int(no)
+            && d.uid == request.auth.uid
+            && d.male is list && d.female is list
+            && d.male.size() <= per && d.female.size() <= per
+            && !(int(no) in d.male) && !(int(no) in d.female);           // 자기 자신 투표 금지
+        }
+        allow get:  if isOwner(c) || (signedIn() && (resource == null || resource.data.uid == request.auth.uid));
+        allow list: if isOwner(c);                                       // 득표 집계는 담임만
+        allow create: if isOwner(c)
+          || (signedIn() && cls(c).pub.votesOpen == true && cls(c).pub.peer.enabled == true
+              && validVote() && pinOk(c, no));
+        allow update: if isOwner(c)
+          || (signedIn() && cls(c).pub.votesOpen == true && validVote() && pinOk(c, no)
+              && (resource.data.uid == request.auth.uid || cls(c).pub.usePin == true));
+        allow delete: if isOwner(c);
+      }
+
+      // ---------- 배정 결과 ----------
+      match /result/{doc} {
+        allow read:  if isOwner(c) || (signedIn() && resource.data.published == true);
+        allow write: if isOwner(c);
+      }
+    }
+
+    // ---------- 학년 공간 ----------
+    match /grades/{g} {
+      function member(cc) { return exists(/databases/$(database)/documents/grades/$(g)/members/$(cc)); }
+
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn() && isCode(g)
+        && request.resource.data.keys().hasOnly(['name', 'createdAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 40;
+      // 학년 이름만 바꿀 수 있음 (학년코드를 아는 사람)
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 40;
+
+      match /members/{cc} {
+        allow read: if signedIn();
+        allow write: if isOwner(cc);                      // 그 반 담임만 참여/탈퇴
+      }
+      match /templates/{t} {
+        allow read: if signedIn();
+        allow create: if isOwner(request.resource.data.classCode) && member(request.resource.data.classCode)
+          && request.resource.data.keys().hasOnly(['name', 'roles', 'byName', 'classCode', 'at'])
+          && request.resource.data.roles is list && request.resource.data.roles.size() <= 80;
+        allow delete: if isOwner(resource.data.classCode);   // 올린 반만 삭제
+      }
+      match /boards/{cc} {
+        allow read: if signedIn();
+        allow write: if isOwner(cc) && member(cc);
+        allow delete: if isOwner(cc);
+      }
+    }
+
+    // 그 밖의 경로는 모두 막음
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

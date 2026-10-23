@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>1인1역 온에어</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hahmlet:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<!-- 파일 읽기 라이브러리 (엑셀·한글·PDF) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- 역할표 PDF·이미지 내려받기 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="lamp" aria-hidden="true"></span>
+      <div>
+        <div class="brand-title">1인1역 <b>ON AIR</b></div>
+        <div class="brand-sub" id="classLabel">우리 반</div>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="settings" class="on">① 설정</button>
+      <button data-tab="prefs">② 희망 받기</button>
+      <button data-tab="peer">③ 또래상담 투표</button>
+      <button data-tab="result">④ 역할 뽑기</button>
+      <button data-tab="grade">⑤ 학년</button>
+    </nav>
+    <div class="top-right" id="topRight"></div>
+  </header>
+
+  <main id="main"></main>
+
+  <!-- 학생 입력 화면(키오스크) -->
+  <section id="kiosk" class="kiosk" hidden></section>
+  <!-- 모달 / 뽑기 연출 / 알림 -->
+  <div id="modal" class="modal" hidden></div>
+  <div id="drum" class="drum" hidden></div>
+  <div id="toast" class="toast"></div>
+  <div id="print" class="print-area"></div>
+  <div id="sheetHost" aria-hidden="true"></div>
+
+  <script src="firebase-config.js"></script>
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
